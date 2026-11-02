@@ -7,7 +7,6 @@ simulation:
   braking: 2.0
 render:
   enabled: true
-  material: IRON_BLOCK
 safety:
   stop-on-unknown-signal: true
   require-connected-route: true

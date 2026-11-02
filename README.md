@@ -20,7 +20,7 @@ An original modular transit simulation framework for **Paper 1.21.8**. The serve
 ```bash
 gradle clean test build
 ```
-GitHub Actions runs the build and unit tests on pushes, pull requests and manual dispatch. The shaded plugin JAR is written to `pmf-plugin/build/libs/pmf-plugin-0.1.0-SNAPSHOT.jar`.
+GitHub Actions builds and tests all modules, packages the shaded plugin JAR, then boots a real Paper 1.21.8 server to verify plugin enablement and SQLite initialization. The shaded plugin JAR is written to `pmf-plugin/build/libs/pmf-plugin-0.1.0-SNAPSHOT.jar`.
 
 ## Modules
 - `pmf-api`: shared immutable value types and state enums.
@@ -42,7 +42,7 @@ GitHub Actions runs the build and unit tests on pushes, pull requests and manual
 Permission: `pmf.admin` (default: operator).
 
 ## Known limitations
-This is an early implementation, not a finished DKZ5 model. The consist is built from scaled vanilla block displays, not a custom resource-pack mesh; the collision proxies are approximate, and block obstruction sampling is not a complete swept-volume physics engine. Rail topology follows vanilla straight, corner and ascending shapes; complex junctions, switches, crossings and full 3D curve interpolation are not yet implemented. Rail breaking/removal synchronization, automatic pathfinding, curves, bogies, doors, passenger seating, stations, signalling, timetables, MySQL and schema migrations remain future work. Do not use this prototype for real-world safety-critical control.
+This is an early implementation, not a finished DKZ5 model. The consist is built from scaled vanilla block displays, not a custom resource-pack mesh; the collision proxies are approximate, and block obstruction sampling is not a complete swept-volume physics engine. Rail topology follows vanilla straight, corner and ascending shapes; complex junctions, switches, crossings and full 3D curve interpolation are not yet implemented. Rail removal is synchronized with the graph and SQLite, and shortest-path routing plus basic bogie geometry are present. Still missing are true 3D curve interpolation, switches/interlocking, a detailed DKZ5 resource-pack mesh, physically accurate swept-volume collision, doors, passenger seating, stations, signalling, timetables, MySQL and schema migrations. Do not use this prototype for real-world safety-critical control.
 
 All Bukkit world/entity access must remain on the server thread.
 See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
