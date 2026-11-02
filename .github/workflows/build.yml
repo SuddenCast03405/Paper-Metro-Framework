@@ -49,9 +49,14 @@ jobs:
           path: plugin
       - name: Download Paper 1.21.8
         run: |
-          BUILD="$(curl -fsSL https://api.papermc.io/v2/projects/paper/versions/1.21.8 | jq -r '.builds[-1]')"
-          test -n "$BUILD" && test "$BUILD" != "null"
-          curl -fL --retry 3 -o paper.jar "https://api.papermc.io/v2/projects/paper/versions/1.21.8/builds/$BUILD/downloads/paper-1.21.8-$BUILD.jar"
+          USER_AGENT="PMF-CI/1.0 (https://github.com/SuddenCast03405/Paper-Metro-Framework)"
+          BUILDS="$(curl -fsSL -H "User-Agent: $USER_AGENT" "https://fill.papermc.io/v3/projects/paper/versions/1.21.8/builds?channel=STABLE&limit=1")"
+          URL="$(echo "$BUILDS" | jq -r '.[0].downloads."server:default".url')"
+          SHA256="$(echo "$BUILDS" | jq -r '.[0].downloads."server:default".checksums.sha256')"
+          test -n "$URL" && test "$URL" != "null"
+          test -n "$SHA256" && test "$SHA256" != "null"
+          curl -fL --retry 3 -H "User-Agent: $USER_AGENT" -o paper.jar "$URL"
+          echo "$SHA256  paper.jar" | sha256sum -c -
       - name: Boot Paper and verify PMF startup plus SQLite
         run: |
           mkdir -p server/plugins
