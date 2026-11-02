@@ -42,7 +42,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         getServer().getPluginManager().registerEvents(this, this);
         taskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, this::tick, 1L,
                 Math.max(1L, getConfig().getLong("simulation.tick-period", 1L)));
-        getLogger().info("PMF enabled. Place vanilla rails to build track; use /pmf help.");
+        getLogger().info("PMF enabled. Use PMF-tagged rail items to build PMF track; vanilla railways remain independent.");
     }
 
     @Override public void onDisable() {
@@ -94,8 +94,27 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             while (r.next()) components.register(new TrackComponent(r.getString(1), TrackComponentType.valueOf(r.getString(2)), r.getString(3), new Vec3(r.getDouble(4), r.getDouble(5), r.getDouble(6))));
         }
         try (Statement s = db.createStatement(); ResultSet r = s.executeQuery("SELECT id,world,x,y,z,speed_limit FROM track_nodes")) {
-            while (r.next()) graph.addNode(new TrackNode(r.getString(1), r.getString(2),
-                    new Vec3(r.getDouble(3), r.getDouble(4), r.getDouble(5)), r.getDouble(6)));
+            while (r.next()) {
+                TrackNode node = new TrackNode(r.getString(1), r.getString(2),
+                        new Vec3(r.getDouble(3), r.getDouble(4), r.getDouble(5)), r.getDouble(6));
+                graph.addNode(node);
+                // Migrate PMF rails created before typed component metadata existed.
+                if (node.id().startsWith("pmf:rail:") && components.get(node.id()) == null) {
+                    TrackComponent component = new TrackComponent(node.id(), TrackComponentType.RAIL,
+                            node.world(), node.position());
+                    components.register(component);
+                    try (PreparedStatement insert = db.prepareStatement(
+                            "INSERT OR IGNORE INTO track_components VALUES(?,?,?,?,?,?)")) {
+                        insert.setString(1, component.id());
+                        insert.setString(2, component.type().name());
+                        insert.setString(3, component.world());
+                        insert.setDouble(4, component.position().x());
+                        insert.setDouble(5, component.position().y());
+                        insert.setDouble(6, component.position().z());
+                        insert.executeUpdate();
+                    }
+                }
+            }
         }
         try (Statement s = db.createStatement(); ResultSet r = s.executeQuery("SELECT from_id,to_id FROM track_edges")) {
             while (r.next()) graph.connect(r.getString(1), r.getString(2));
