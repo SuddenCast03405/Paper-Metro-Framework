@@ -14,4 +14,11 @@ class TrackGraphTest {
   assertThrows(IllegalArgumentException.class,()->graph.route(List.of("A","missing")));
   assertThrows(IllegalArgumentException.class,()->graph.route(List.of("A","B")));
  }
+ @Test void removingNodeAlsoRemovesItsConnections(){
+  TrackGraph graph=new TrackGraph();graph.addNode(node("A","world",0));graph.addNode(node("B","world",10));graph.addNode(node("C","world",20));
+  graph.connect("A","B");graph.connect("B","C");graph.removeNode("B");
+  assertNull(graph.node("B"));
+  assertThrows(IllegalArgumentException.class,()->graph.route(List.of("A","B")));
+  assertThrows(IllegalArgumentException.class,()->graph.route(List.of("B","C")));
+ }
 }

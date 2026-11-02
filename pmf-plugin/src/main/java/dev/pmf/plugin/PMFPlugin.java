@@ -157,6 +157,13 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             train.sim.tick(dt);
             train.render();
         }
+        trains.values().removeIf(train -> {
+            if (train.sim.finished() && train.sim.state() == TrainState.STOPPED) {
+                train.remove();
+                return true;
+            }
+            return false;
+        });
     }
 
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
