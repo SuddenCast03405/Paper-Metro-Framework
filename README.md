@@ -4,8 +4,9 @@
 An original modular transit simulation framework for **Paper 1.21.8**. The server owns simulation and rendering; players do not need client-side mods. PMF does not depend on a hybrid server, TrainCarts or BKCommonLib.
 
 ## Current playable prototype
-- Place vanilla rails (normal, powered, detector or activator rails) directly in the world. PMF records each placed rail as a track node and derives links from vanilla straight, corner and ascending rail shapes in SQLite.
-- `/pmf track kit` gives a starter bundle; `/pmf track list` prints the generated route-node IDs.
+- `/pmf track kit` gives PMF-tagged standard and powered rail items. Their item identity is namespaced with the plugin's `pmf:rail` PersistentDataContainer key; the placed block remains a vanilla rail for client compatibility.
+- PMF registers only rails placed from its tagged items. Ordinary vanilla rails, including existing player-built railways, are ignored and are not modified. `/pmf track list` prints PMF-owned route-node IDs.
+- Track connectivity still follows the placed vanilla rail's straight, corner and ascending block shape; PMF stores the network and route graph separately in SQLite.
 - `/pmf train spawn <id> <start-node> <end-node>` automatically finds a shortest connected route through the placed rails.
 - For manual control, `/pmf train spawn <id> <node1,node2,...>` still accepts an explicit node sequence.
 - The train renderer now uses a three-car layered metro silhouette: silver body shells, roof, continuous dark window bands, red waist stripe, end glazing, underframes and separate bogies.
@@ -25,7 +26,7 @@ GitHub Actions builds and tests all modules, packages the shaded plugin JAR, the
 ## Modules
 - `pmf-api`: shared immutable value types and state enums.
 - `pmf-engine`: track graph validation and fixed-step train kinematics; includes JUnit tests.
-- `pmf-plugin`: Paper event integration, rail placement capture, SQLite persistence, display consist and collision proxies.
+- `pmf-plugin`: Paper event integration, PMF-tagged rail placement capture, SQLite persistence, display consist and collision proxies.
 
 ## Commands
 - `/pmf help`

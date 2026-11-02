@@ -13,6 +13,9 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataType;
+import net.kyori.adventure.text.Component;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.util.Transformation;
 import org.joml.Quaternionf;
@@ -25,12 +28,14 @@ import java.util.*;
 /** Paper adapter: real vanilla rail blocks, display-only visuals and server-side collision proxies. */
 public final class PMFPlugin extends JavaPlugin implements CommandExecutor, Listener {
     private Connection db;
+    private NamespacedKey railItemKey;
     private final TrackGraph graph = new TrackGraph();
     private final Map<String, RuntimeTrain> trains = new LinkedHashMap<>();
     private int taskId = -1;
 
     @Override public void onEnable() {
         saveDefaultConfig();
+        railItemKey = new NamespacedKey(this, "rail");
         if (!openDatabase()) { getServer().getPluginManager().disablePlugin(this); return; }
         Objects.requireNonNull(getCommand("pmf")).setExecutor(this);
         getServer().getPluginManager().registerEvents(this, this);
@@ -76,7 +81,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
 
     @EventHandler(ignoreCancelled = true)
     public void onRailPlace(BlockPlaceEvent event) {
-        if (!isRail(event.getBlockPlaced().getType())) return;
+        if (!isRail(event.getBlockPlaced().getType()) || !isPmfRailItem(event.getItemInHand())) return;
         Location location = event.getBlockPlaced().getLocation();
         Bukkit.getScheduler().runTask(this, () -> registerRail(location));
     }
@@ -86,6 +91,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         Block block = event.getBlock();
         if (!isRail(block.getType())) return;
         String id = railId(block);
+        if (graph.node(id) == null) return; // Never alter unrelated vanilla rails.
         Location location = block.getLocation();
         Bukkit.getScheduler().runTask(this, () -> {
             unregisterRail(id);
@@ -136,8 +142,34 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         }
     }
 
+    private boolean isPmfRailItem(ItemStack item) {
+        if (item == null || !isRail(item.getType()) || !item.hasItemMeta()) return false;
+        return item.getItemMeta().getPersistentDataContainer()
+                .has(railItemKey, PersistentDataType.STRING);
+    }
+
+    private ItemStack createPmfRail(Material material, int amount, String variant) {
+        ItemStack item = new ItemStack(material, amount);
+        ItemMeta meta = item.getItemMeta();
+        String label = switch (variant) {
+            case "powered" -> "PMF Powered Rail";
+            case "detector" -> "PMF Detector Rail";
+            case "activator" -> "PMF Activator Rail";
+            default -> "PMF Standard Rail";
+        };
+        meta.displayName(Component.text(label));
+        meta.lore(List.of(
+                Component.text("PMF namespace: pmf:rail"),
+                Component.text("PMF-managed railway component")
+        ));
+        meta.getPersistentDataContainer().set(railItemKey, PersistentDataType.STRING, variant);
+        item.setItemMeta(meta);
+        return item;
+    }
+
     private String railId(Block block) {
-        return "rail:" + block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
+        return "pmf:rail:" + block.getWorld().getUID() + ":" + block.getX()
+                + ":" + block.getY() + ":" + block.getZ();
     }
 
     /**
@@ -251,8 +283,8 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         if (!p.hasPermission("pmf.admin")) { p.sendMessage("§cNo permission."); return true; }
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
             p.sendMessage("§6PMF commands");
-            p.sendMessage("§ePlace vanilla rails directly to create track nodes.");
-            p.sendMessage("§e/pmf track kit §7- get a rail-laying kit");
+            p.sendMessage("§ePlace PMF-tagged rails to create PMF track nodes; ordinary vanilla rails are ignored.");
+            p.sendMessage("§e/pmf track kit §7- get PMF-namespaced rail items");
             p.sendMessage("§e/pmf track list §7- list saved rail node IDs");
             p.sendMessage("§e/pmf node add <id> [speed] §7- manual waypoint");
             p.sendMessage("§e/pmf node connect <from> <to>");
@@ -272,13 +304,14 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
 
     private void trackCommand(Player p, String[] a) {
         if (a.length == 2 && a[1].equalsIgnoreCase("kit")) {
-            p.getInventory().addItem(new ItemStack(Material.RAIL, 64),
-                    new ItemStack(Material.POWERED_RAIL, 32), new ItemStack(Material.REDSTONE_TORCH, 16));
-            p.sendMessage("§aRail kit added. Place rails normally; PMF records and connects them.");
+            p.getInventory().addItem(createPmfRail(Material.RAIL, 64, "standard"),
+                    createPmfRail(Material.POWERED_RAIL, 32, "powered"),
+                    new ItemStack(Material.REDSTONE_TORCH, 16));
+            p.sendMessage("§aPMF rail kit added. Only these tagged rails join the PMF network.");
             return;
         }
         if (a.length == 2 && a[1].equalsIgnoreCase("list")) {
-            graph.nodes().stream().filter(n -> n.id().startsWith("rail:"))
+            graph.nodes().stream().filter(n -> n.id().startsWith("pmf:rail:"))
                     .forEach(n -> p.sendMessage("§e" + n.id() + " §7" + n.position()));
             return;
         }
