@@ -4,6 +4,8 @@ import dev.pmf.api.*;
 import dev.pmf.engine.*;
 import org.bukkit.*;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.Rail;
 import org.bukkit.command.*;
 import org.bukkit.entity.*;
 import org.bukkit.event.*;
@@ -84,7 +86,11 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         Block block = event.getBlock();
         if (!isRail(block.getType())) return;
         String id = railId(block);
-        Bukkit.getScheduler().runTask(this, () -> unregisterRail(id));
+        Location location = block.getLocation();
+        Bukkit.getScheduler().runTask(this, () -> {
+            unregisterRail(id);
+            refreshRailNeighborhood(location.getBlock());
+        });
     }
 
     /** Prevent the invisible slime collision proxies from ever damaging players or mobs. */
@@ -114,14 +120,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
                 q.setDouble(3, node.position().x()); q.setDouble(4, node.position().y());
                 q.setDouble(5, node.position().z()); q.setDouble(6, speed); q.executeUpdate();
             }
-            for (TrackNode other : graph.nodes()) {
-                if (other.id().equals(id) || !other.id().startsWith("rail:") || !other.world().equals(node.world())) continue;
-                if (node.position().distance(other.position()) <= 1.8) {
-                    graph.connect(id, other.id());
-                    persistEdge(id, other.id());
-                    persistEdge(other.id(), id);
-                }
-            }
+            refreshRailNeighborhood(block);
         } catch (Exception e) { getLogger().warning("Could not register rail at " + location + ": " + e.getMessage()); }
     }
 
@@ -139,6 +138,87 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
 
     private String railId(Block block) {
         return "rail:" + block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
+    }
+
+    /**
+     * Rebuilds only the small rail neighborhood affected by vanilla rail shape updates.
+     * Unlike distance-only linking, this respects straight, curved and ascending rail
+     * shapes and avoids joining parallel tracks that merely happen to be close together.
+     */
+    private void refreshRailNeighborhood(Block center) {
+        List<Block> affected = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    Block candidate = center.getRelative(dx, dy, dz);
+                    if (isRail(candidate.getType())) affected.add(candidate);
+                }
+            }
+        }
+
+        // Remove old links first, then re-add nodes, so changed vanilla shapes cannot
+        // leave stale edges behind in either the in-memory graph or SQLite.
+        List<TrackNode> existing = new ArrayList<>();
+        for (Block block : affected) {
+            TrackNode node = graph.node(railId(block));
+            if (node != null) existing.add(node);
+        }
+        for (TrackNode node : existing) graph.removeNode(node.id());
+        for (TrackNode node : existing) graph.addNode(node);
+        try (PreparedStatement delete = db.prepareStatement(
+                "DELETE FROM track_edges WHERE from_id=? OR to_id=?")) {
+            for (TrackNode node : existing) {
+                delete.setString(1, node.id());
+                delete.setString(2, node.id());
+                delete.addBatch();
+            }
+            delete.executeBatch();
+        } catch (SQLException e) {
+            getLogger().warning("Could not refresh rail links: " + e.getMessage());
+        }
+
+        for (Block block : affected) {
+            String id = railId(block);
+            if (graph.node(id) == null) continue;
+            for (Block neighbor : railNeighbors(block)) {
+                if (!isRail(neighbor.getType())) continue;
+                String neighborId = railId(neighbor);
+                if (graph.node(neighborId) == null || !railNeighbors(neighbor).stream()
+                        .anyMatch(back -> sameBlock(back, block))) continue;
+                graph.connect(id, neighborId);
+                try {
+                    persistEdge(id, neighborId);
+                    persistEdge(neighborId, id);
+                } catch (SQLException e) {
+                    getLogger().warning("Could not persist rail connection: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    private boolean sameBlock(Block a, Block b) {
+        return a.getWorld().getUID().equals(b.getWorld().getUID())
+                && a.getX() == b.getX() && a.getY() == b.getY() && a.getZ() == b.getZ();
+    }
+
+    private List<Block> railNeighbors(Block block) {
+        if (!(block.getBlockData() instanceof Rail rail)) return List.of();
+        return switch (rail.getShape()) {
+            case NORTH_SOUTH -> List.of(block.getRelative(BlockFace.NORTH), block.getRelative(BlockFace.SOUTH));
+            case EAST_WEST -> List.of(block.getRelative(BlockFace.EAST), block.getRelative(BlockFace.WEST));
+            case ASCENDING_EAST -> List.of(block.getRelative(BlockFace.EAST).getRelative(BlockFace.UP),
+                    block.getRelative(BlockFace.WEST));
+            case ASCENDING_WEST -> List.of(block.getRelative(BlockFace.WEST).getRelative(BlockFace.UP),
+                    block.getRelative(BlockFace.EAST));
+            case ASCENDING_NORTH -> List.of(block.getRelative(BlockFace.NORTH).getRelative(BlockFace.UP),
+                    block.getRelative(BlockFace.SOUTH));
+            case ASCENDING_SOUTH -> List.of(block.getRelative(BlockFace.SOUTH).getRelative(BlockFace.UP),
+                    block.getRelative(BlockFace.NORTH));
+            case NORTH_EAST -> List.of(block.getRelative(BlockFace.NORTH), block.getRelative(BlockFace.EAST));
+            case NORTH_WEST -> List.of(block.getRelative(BlockFace.NORTH), block.getRelative(BlockFace.WEST));
+            case SOUTH_EAST -> List.of(block.getRelative(BlockFace.SOUTH), block.getRelative(BlockFace.EAST));
+            case SOUTH_WEST -> List.of(block.getRelative(BlockFace.SOUTH), block.getRelative(BlockFace.WEST));
+        };
     }
 
     private void persistEdge(String from, String to) throws SQLException {
