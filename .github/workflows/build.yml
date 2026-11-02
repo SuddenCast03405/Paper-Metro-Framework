@@ -57,7 +57,7 @@ jobs:
           mkdir -p server/plugins
           cp plugin/pmf-plugin-*.jar server/plugins/PMF.jar
           cp paper.jar server/paper.jar
-          printf 'eula=true\\n' > server/eula.txt
+          printf 'eula=true\n' > server/eula.txt
           cd server
           java -Xms1G -Xmx1G -jar paper.jar --nogui > server.log 2>&1 &
           SERVER_PID=$!
