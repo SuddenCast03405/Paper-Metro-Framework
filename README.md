@@ -6,7 +6,8 @@ An original modular transit simulation framework for **Paper 1.21.8**. The serve
 ## Current playable prototype
 - Place vanilla rails (normal, powered, detector or activator rails) directly in the world. PMF records each placed rail as a track node and links nearby rail nodes in SQLite.
 - `/pmf track kit` gives a starter bundle; `/pmf track list` prints the generated route-node IDs.
-- `/pmf train spawn <id> <node1,node2,...>` starts a train along a route assembled from those IDs.
+- `/pmf train spawn <id> <start-node> <end-node>` automatically finds a shortest connected route through the placed rails.
+- For manual control, `/pmf train spawn <id> <node1,node2,...>` still accepts an explicit node sequence.
 - The train renderer now uses a three-car, layered light-grey/red/black-glass display consist instead of a single iron block.
 - Display entities are visual only. PMF therefore creates invisible server-side Slime collision proxies for each car and checks the consist's sampled volume against solid blocks, triggering a protective stop on obstruction.
 
@@ -33,7 +34,8 @@ GitHub Actions runs the build and unit tests on pushes, pull requests and manual
 - `/pmf node add <id> [speed]`
 - `/pmf node connect <from> <to>`
 - `/pmf node list`
-- `/pmf train spawn <id> <node1,node2,...>`
+- `/pmf train spawn <id> <start-node> <end-node>`
+- `/pmf train spawn <id> <node1,node2,...>` (explicit route)
 - `/pmf train stop <id>`
 - `/pmf train list`
 
