@@ -29,7 +29,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pmf-plugin
-          path: pmf-plugin/build/libs/pmf-plugin-*.jar
+          path: pmf-plugin/build/libs/pmf-plugin-*-SNAPSHOT.jar
           if-no-files-found: error
 
   paper-smoke-test:
@@ -60,7 +60,7 @@ jobs:
       - name: Boot Paper and verify PMF startup plus SQLite
         run: |
           mkdir -p server/plugins
-          cp plugin/pmf-plugin-*.jar server/plugins/PMF.jar
+          cp plugin/pmf-plugin-*-SNAPSHOT.jar server/plugins/PMF.jar
           cp paper.jar server/paper.jar
           printf 'eula=true\n' > server/eula.txt
           cd server
