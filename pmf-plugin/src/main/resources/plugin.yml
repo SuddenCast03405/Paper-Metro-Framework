@@ -1,0 +1,14 @@
+name: PMF
+version: 0.1.0
+main: dev.pmf.plugin.PMFPlugin
+api-version: '1.21'
+authors: [PMF]
+description: Paper Metro Framework transit simulation.
+commands:
+  pmf:
+    description: PMF administration commands
+    usage: /pmf help
+    permission: pmf.admin
+permissions:
+  pmf.admin:
+    default: op

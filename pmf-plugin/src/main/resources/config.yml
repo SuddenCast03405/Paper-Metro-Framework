@@ -1,0 +1,13 @@
+database:
+  file: pmf.db
+simulation:
+  tick-period: 1
+  max-speed-blocks-per-second: 8.0
+  acceleration: 1.2
+  braking: 2.0
+render:
+  enabled: true
+  material: IRON_BLOCK
+safety:
+  stop-on-unknown-signal: true
+  require-connected-route: true

@@ -1,17 +1,14 @@
 name: Build
-
 on:
   push:
     branches: [ main ]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
-    name: Gradle build (JDK 21)
+    name: Gradle build and unit tests (JDK 21)
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -21,21 +18,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Restore PMF source archive
-        run: |
-          cat .pmf-source/part*.b64 | base64 --decode > pmf-source.zip
-          unzip -q pmf-source.zip -d "$RUNNER_TEMP/pmf"
       - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Build all modules
-        working-directory: ${{ runner.temp }}/pmf/PMF
-        run: gradle --no-daemon clean build
+      - name: Run unit tests and build all modules
+        run: gradle --no-daemon clean test build
       - name: Upload plugin JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: pmf-plugin
-          path: ${{ runner.temp }}/pmf/PMF/pmf-plugin/build/libs/pmf-plugin-*.jar
+          path: pmf-plugin/build/libs/pmf-plugin-*.jar
           if-no-files-found: error
