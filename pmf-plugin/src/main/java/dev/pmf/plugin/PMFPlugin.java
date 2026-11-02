@@ -30,6 +30,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
     private Connection db;
     private NamespacedKey railItemKey;
     private final TrackGraph graph = new TrackGraph();
+    private final TrackComponentRegistry components = new TrackComponentRegistry();
     private final Map<String, RuntimeTrain> trains = new LinkedHashMap<>();
     private int taskId = -1;
 
@@ -60,6 +61,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             try (Statement s = db.createStatement()) {
                 s.executeUpdate("CREATE TABLE IF NOT EXISTS track_nodes (id TEXT PRIMARY KEY, world TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, speed_limit REAL NOT NULL)");
                 s.executeUpdate("CREATE TABLE IF NOT EXISTS track_edges (from_id TEXT NOT NULL, to_id TEXT NOT NULL, PRIMARY KEY(from_id,to_id))");
+                s.executeUpdate("CREATE TABLE IF NOT EXISTS track_components (id TEXT PRIMARY KEY, component_type TEXT NOT NULL, world TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL)");
             }
             purgeLegacyVanillaRailCapture();
             loadGraph();
@@ -88,6 +90,9 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
     }
 
     private void loadGraph() throws SQLException {
+        try (Statement s = db.createStatement(); ResultSet r = s.executeQuery("SELECT id,component_type,world,x,y,z FROM track_components")) {
+            while (r.next()) components.register(new TrackComponent(r.getString(1), TrackComponentType.valueOf(r.getString(2)), r.getString(3), new Vec3(r.getDouble(4), r.getDouble(5), r.getDouble(6))));
+        }
         try (Statement s = db.createStatement(); ResultSet r = s.executeQuery("SELECT id,world,x,y,z,speed_limit FROM track_nodes")) {
             while (r.next()) graph.addNode(new TrackNode(r.getString(1), r.getString(2),
                     new Vec3(r.getDouble(3), r.getDouble(4), r.getDouble(5)), r.getDouble(6)));
@@ -139,6 +144,12 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
                 new Vec3(block.getX() + 0.5, block.getY() + 0.12, block.getZ() + 0.5), speed);
         try {
             graph.addNode(node);
+            TrackComponent component = new TrackComponent(id, TrackComponentType.RAIL, node.world(), node.position());
+            components.register(component);
+            try (PreparedStatement c = db.prepareStatement("INSERT OR REPLACE INTO track_components VALUES(?,?,?,?,?,?)")) {
+                c.setString(1, component.id()); c.setString(2, component.type().name()); c.setString(3, component.world());
+                c.setDouble(4, component.position().x()); c.setDouble(5, component.position().y()); c.setDouble(6, component.position().z()); c.executeUpdate();
+            }
             try (PreparedStatement q = db.prepareStatement("INSERT OR REPLACE INTO track_nodes VALUES(?,?,?,?,?,?)")) {
                 q.setString(1, id); q.setString(2, node.world());
                 q.setDouble(3, node.position().x()); q.setDouble(4, node.position().y());
@@ -150,10 +161,13 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
 
     private void unregisterRail(String id) {
         graph.removeNode(id);
+        components.remove(id);
         try (PreparedStatement e = db.prepareStatement("DELETE FROM track_edges WHERE from_id=? OR to_id=?");
-             PreparedStatement n = db.prepareStatement("DELETE FROM track_nodes WHERE id=?")) {
+             PreparedStatement n = db.prepareStatement("DELETE FROM track_nodes WHERE id=?");
+             PreparedStatement c = db.prepareStatement("DELETE FROM track_components WHERE id=?")) {
             e.setString(1, id); e.setString(2, id); e.executeUpdate();
             n.setString(1, id); n.executeUpdate();
+            c.setString(1, id); c.executeUpdate();
         } catch (SQLException ex) { getLogger().warning("Could not remove rail node " + id + ": " + ex.getMessage()); }
         for (RuntimeTrain train : trains.values()) {
             if (train.sim.routeView().stream().anyMatch(node -> node.id().equals(id))) train.sim.emergencyStop();

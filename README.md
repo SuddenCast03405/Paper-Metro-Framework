@@ -13,6 +13,9 @@ An original modular transit simulation framework for **Paper 1.21.8**. The serve
 - The train renderer now uses a three-car layered metro silhouette: silver body shells, roof, continuous dark window bands, red waist stripe, end glazing, underframes and separate bogies.
 - Display entities are visual only. PMF therefore creates invisible server-side Slime collision proxies for each car and checks the consist's sampled volume against solid blocks, triggering a protective stop on obstruction.
 
+## PMF infrastructure namespace
+PMF component IDs use the pmf: namespace and are independent of Minecraft block IDs. The engine has a typed registry for rails, switches, signals, stations, platforms and depots. The Paper adapter currently persists PMF rail components in SQLite; the other component types are defined for subsequent feature work and are not yet placeable in-game. A PMF rail may be backed by a vanilla rail block, while an ordinary vanilla rail is not automatically adopted.
+
 ## Requirements
 - Java 21
 - Gradle 8.x
@@ -25,8 +28,8 @@ gradle clean test build
 GitHub Actions builds and tests all modules, packages the shaded plugin JAR, then boots a real Paper 1.21.8 server to verify plugin enablement and SQLite initialization. The shaded plugin JAR is written to `pmf-plugin/build/libs/pmf-plugin-0.1.0-SNAPSHOT.jar`.
 
 ## Modules
-- `pmf-api`: shared immutable value types and state enums.
-- `pmf-engine`: track graph validation and fixed-step train kinematics; includes JUnit tests.
+- `pmf-api`: shared immutable value types, PMF infrastructure component types (RAIL, SWITCH, SIGNAL, STATION, PLATFORM, DEPOT) and state enums.
+- `pmf-engine`: track graph validation, typed component registry and fixed-step train kinematics; includes JUnit tests.
 - `pmf-plugin`: Paper event integration, PMF-tagged rail placement capture, SQLite persistence, display consist and collision proxies.
 
 ## Commands
