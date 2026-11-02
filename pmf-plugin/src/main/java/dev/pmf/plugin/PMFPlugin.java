@@ -1,92 +1,335 @@
 package dev.pmf.plugin;
-import dev.pmf.api.*;import dev.pmf.engine.*;
-import org.bukkit.*;import org.bukkit.command.*;import org.bukkit.entity.BlockDisplay;import org.bukkit.entity.Display;
-import org.bukkit.plugin.java.JavaPlugin;import org.bukkit.util.Transformation;import org.joml.Vector3f;
-import java.io.File;import java.sql.*;import java.util.*;
-public final class PMFPlugin extends JavaPlugin implements CommandExecutor {
- private Connection db;private final TrackGraph graph=new TrackGraph();private final Map<String,RuntimeTrain> trains=new LinkedHashMap<>();private int taskId=-1;
- @Override public void onEnable(){
-  saveDefaultConfig();if(!openDatabase()){getServer().getPluginManager().disablePlugin(this);return;}
-  Objects.requireNonNull(getCommand("pmf")).setExecutor(this);
-  taskId=Bukkit.getScheduler().scheduleSyncRepeatingTask(this,this::tick,1L,Math.max(1L,getConfig().getLong("simulation.tick-period",1L)));
-  getLogger().info("PMF enabled. Use /pmf help");
- }
- @Override public void onDisable(){
-  if(taskId!=-1)Bukkit.getScheduler().cancelTask(taskId);trains.values().forEach(RuntimeTrain::remove);
-  try{if(db!=null&&!db.isClosed())db.close();}catch(SQLException e){getLogger().severe(e.getMessage());}
- }
- private boolean openDatabase(){
-  try{
-   if(!getDataFolder().exists()&&!getDataFolder().mkdirs())throw new SQLException("Cannot create plugin data folder");
-   File file=new File(getDataFolder(),getConfig().getString("database.file","pmf.db"));db=DriverManager.getConnection("jdbc:sqlite:"+file.getAbsolutePath());
-   try(Statement s=db.createStatement()){
-    s.executeUpdate("CREATE TABLE IF NOT EXISTS track_nodes (id TEXT PRIMARY KEY, world TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, speed_limit REAL NOT NULL)");
-    s.executeUpdate("CREATE TABLE IF NOT EXISTS track_edges (from_id TEXT NOT NULL, to_id TEXT NOT NULL, PRIMARY KEY(from_id,to_id))");
-   }loadGraph();return true;
-  }catch(Exception e){getLogger().severe("SQLite initialization failed: "+e.getMessage());return false;}
- }
- private void loadGraph()throws SQLException{
-  try(Statement s=db.createStatement();ResultSet r=s.executeQuery("SELECT id,world,x,y,z,speed_limit FROM track_nodes")){
-   while(r.next())graph.addNode(new TrackNode(r.getString(1),r.getString(2),new Vec3(r.getDouble(3),r.getDouble(4),r.getDouble(5)),r.getDouble(6)));
-  }
-  try(Statement s=db.createStatement();ResultSet r=s.executeQuery("SELECT from_id,to_id FROM track_edges")){while(r.next())graph.connect(r.getString(1),r.getString(2));}
- }
- private void tick(){
-  double dt=getConfig().getLong("simulation.tick-period",1L)/20.0;
-  for(RuntimeTrain train:trains.values()){train.sim.tick(dt);train.render();}
-  trains.values().removeIf(t->{if(t.sim.finished()&&t.sim.state()==TrainState.STOPPED){t.remove();return true;}return false;});
- }
- @Override public boolean onCommand(CommandSender sender,Command command,String label,String[] args){
-  if(!(sender instanceof org.bukkit.entity.Player p)){sender.sendMessage("Use this command in-game.");return true;}
-  if(!p.hasPermission("pmf.admin")){p.sendMessage("§cNo permission.");return true;}
-  if(args.length==0||args[0].equalsIgnoreCase("help")){
-   p.sendMessage("§6PMF commands");p.sendMessage("§e/pmf node add <id> [speed]");p.sendMessage("§e/pmf node connect <from> <to>");
-   p.sendMessage("§e/pmf node list");p.sendMessage("§e/pmf train spawn <id> <node1,node2,...>");p.sendMessage("§e/pmf train stop <id>");p.sendMessage("§e/pmf train list");return true;
-  }
-  try{if(args[0].equalsIgnoreCase("node"))nodeCommand(p,args);else if(args[0].equalsIgnoreCase("train"))trainCommand(p,args);else p.sendMessage("§cUnknown command. /pmf help");}
-  catch(Exception e){p.sendMessage("§cPMF: "+e.getMessage());}return true;
- }
- private void nodeCommand(org.bukkit.entity.Player p,String[] a)throws SQLException{
-  if(a.length>=3&&a[1].equalsIgnoreCase("add")){
-   String id=a[2];double speed=a.length>=4?Double.parseDouble(a[3]):getConfig().getDouble("simulation.max-speed-blocks-per-second",8.0);
-   Location l=p.getLocation();TrackNode n=new TrackNode(id,l.getWorld().getName(),new Vec3(l.getX(),l.getY(),l.getZ()),speed);graph.addNode(n);
-   try(PreparedStatement q=db.prepareStatement("INSERT OR REPLACE INTO track_nodes VALUES(?,?,?,?,?,?)")){
-    q.setString(1,id);q.setString(2,n.world());q.setDouble(3,n.position().x());q.setDouble(4,n.position().y());q.setDouble(5,n.position().z());q.setDouble(6,speed);q.executeUpdate();
-   }p.sendMessage("§aTrack node created: "+id);return;
-  }
-  if(a.length==4&&a[1].equalsIgnoreCase("connect")){
-   if(!graph.connect(a[2],a[3]))throw new IllegalArgumentException("Both nodes must exist.");
-   try(PreparedStatement q=db.prepareStatement("INSERT OR IGNORE INTO track_edges VALUES(?,?)")){
-    q.setString(1,a[2]);q.setString(2,a[3]);q.executeUpdate();q.setString(1,a[3]);q.setString(2,a[2]);q.executeUpdate();
-   }p.sendMessage("§aConnected "+a[2]+" <-> "+a[3]);return;
-  }
-  if(a.length==2&&a[1].equalsIgnoreCase("list")){graph.nodes().forEach(n->p.sendMessage("§e"+n.id()+" §7"+n.world()+" "+n.position()));return;}
-  throw new IllegalArgumentException("Usage: /pmf node add|connect|list ...");
- }
- private void trainCommand(org.bukkit.entity.Player p,String[] a){
-  if(a.length==4&&a[1].equalsIgnoreCase("spawn")){
-   if(trains.containsKey(a[2]))throw new IllegalArgumentException("Train already exists.");
-   List<String> ids=Arrays.stream(a[3].split(",")).map(String::trim).toList();List<TrackNode> route=graph.route(ids);
-   World w=Bukkit.getWorld(route.getFirst().world());if(w==null)throw new IllegalArgumentException("Track world is not loaded.");
-   TrainSimulation sim=new TrainSimulation(a[2],route,getConfig().getDouble("simulation.max-speed-blocks-per-second",8.0),getConfig().getDouble("simulation.acceleration",1.2),getConfig().getDouble("simulation.braking",2.0));
-   RuntimeTrain runtime=new RuntimeTrain(sim,w);trains.put(a[2],runtime);sim.start();p.sendMessage("§aTrain spawned: "+a[2]);return;
-  }
-  if(a.length==3&&a[1].equalsIgnoreCase("stop")){RuntimeTrain t=trains.get(a[2]);if(t==null)throw new IllegalArgumentException("Unknown train.");t.sim.stop();p.sendMessage("§eTrain braking: "+a[2]);return;}
-  if(a.length==2&&a[1].equalsIgnoreCase("list")){trains.values().forEach(t->p.sendMessage("§e"+t.sim.id()+" §7"+t.sim.state()+" §f"+String.format(Locale.US,"%.2f",t.sim.speed())+" blocks/s"));return;}
-  throw new IllegalArgumentException("Usage: /pmf train spawn|stop|list ...");
- }
- private final class RuntimeTrain{
-  final TrainSimulation sim;final World world;BlockDisplay body;
-  RuntimeTrain(TrainSimulation sim,World world){
-   this.sim=sim;this.world=world;
-   if(getConfig().getBoolean("render.enabled",true))body=world.spawn(toLocation(sim.position()),BlockDisplay.class,d->{
-    Material m=Material.matchMaterial(getConfig().getString("render.material","IRON_BLOCK"));d.setBlock((m==null?Material.IRON_BLOCK:m).createBlockData());
-    d.setBillboard(Display.Billboard.FIXED);d.setInterpolationDuration(1);
-    d.setTransformation(new Transformation(new Vector3f(0,0,0),new org.joml.AxisAngle4f(),new Vector3f(2.5f,1.2f,5.0f),new org.joml.AxisAngle4f()));d.setPersistent(false);
-   });
-  }
-  Location toLocation(Vec3 v){return new Location(world,v.x(),v.y(),v.z());}
-  void render(){if(body!=null&&body.isValid())body.teleport(toLocation(sim.position()));}
-  void remove(){if(body!=null&&body.isValid())body.remove();}
- }
+
+import dev.pmf.api.*;
+import dev.pmf.engine.*;
+import org.bukkit.*;
+import org.bukkit.block.Block;
+import org.bukkit.command.*;
+import org.bukkit.entity.*;
+import org.bukkit.event.*;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.util.Transformation;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
+
+import java.io.File;
+import java.sql.*;
+import java.util.*;
+
+/**
+ * Paper-side adapter. Rails are real vanilla rail blocks; display entities are visual only.
+ * Slimes are invisible server-side collision proxies because Display entities have no hitbox.
+ */
+public final class PMFPlugin extends JavaPlugin implements CommandExecutor, Listener {
+    private Connection db;
+    private final TrackGraph graph = new TrackGraph();
+    private final Map<String, RuntimeTrain> trains = new LinkedHashMap<>();
+    private int taskId = -1;
+
+    @Override public void onEnable() {
+        saveDefaultConfig();
+        if (!openDatabase()) { getServer().getPluginManager().disablePlugin(this); return; }
+        Objects.requireNonNull(getCommand("pmf")).setExecutor(this);
+        getServer().getPluginManager().registerEvents(this, this);
+        taskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, this::tick, 1L,
+                Math.max(1L, getConfig().getLong("simulation.tick-period", 1L)));
+        getLogger().info("PMF enabled. Place vanilla rails to build track; use /pmf help.");
+    }
+
+    @Override public void onDisable() {
+        if (taskId != -1) Bukkit.getScheduler().cancelTask(taskId);
+        trains.values().forEach(RuntimeTrain::remove);
+        try { if (db != null && !db.isClosed()) db.close(); }
+        catch (SQLException e) { getLogger().severe(e.getMessage()); }
+    }
+
+    private boolean openDatabase() {
+        try {
+            if (!getDataFolder().exists() && !getDataFolder().mkdirs())
+                throw new SQLException("Cannot create plugin data folder");
+            File file = new File(getDataFolder(), getConfig().getString("database.file", "pmf.db"));
+            db = DriverManager.getConnection("jdbc:sqlite:" + file.getAbsolutePath());
+            try (Statement s = db.createStatement()) {
+                s.executeUpdate("CREATE TABLE IF NOT EXISTS track_nodes (id TEXT PRIMARY KEY, world TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, speed_limit REAL NOT NULL)");
+                s.executeUpdate("CREATE TABLE IF NOT EXISTS track_edges (from_id TEXT NOT NULL, to_id TEXT NOT NULL, PRIMARY KEY(from_id,to_id))");
+            }
+            loadGraph();
+            return true;
+        } catch (Exception e) {
+            getLogger().severe("SQLite initialization failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void loadGraph() throws SQLException {
+        try (Statement s = db.createStatement(); ResultSet r = s.executeQuery("SELECT id,world,x,y,z,speed_limit FROM track_nodes")) {
+            while (r.next()) graph.addNode(new TrackNode(r.getString(1), r.getString(2),
+                    new Vec3(r.getDouble(3), r.getDouble(4), r.getDouble(5)), r.getDouble(6)));
+        }
+        try (Statement s = db.createStatement(); ResultSet r = s.executeQuery("SELECT from_id,to_id FROM track_edges")) {
+            while (r.next()) graph.connect(r.getString(1), r.getString(2));
+        }
+    }
+
+    /** Vanilla rail placement creates persistent graph nodes and joins adjacent placed rails. */
+    @EventHandler(ignoreCancelled = true)
+    public void onRailPlace(BlockPlaceEvent event) {
+        Material type = event.getBlockPlaced().getType();
+        if (type != Material.RAIL && type != Material.POWERED_RAIL
+                && type != Material.DETECTOR_RAIL && type != Material.ACTIVATOR_RAIL) return;
+        Location location = event.getBlockPlaced().getLocation();
+        Bukkit.getScheduler().runTask(this, () -> registerRail(location));
+    }
+
+    private void registerRail(Location location) {
+        Block block = location.getBlock();
+        if (block.getType() != Material.RAIL && block.getType() != Material.POWERED_RAIL
+                && block.getType() != Material.DETECTOR_RAIL && block.getType() != Material.ACTIVATOR_RAIL) return;
+        String id = railId(block);
+        if (graph.nodes().stream().anyMatch(n -> n.id().equals(id))) return;
+        double speed = getConfig().getDouble("simulation.max-speed-blocks-per-second", 8.0);
+        TrackNode node = new TrackNode(id, block.getWorld().getName(),
+                new Vec3(block.getX() + 0.5, block.getY() + 0.12, block.getZ() + 0.5), speed);
+        try {
+            graph.addNode(node);
+            try (PreparedStatement q = db.prepareStatement("INSERT OR REPLACE INTO track_nodes VALUES(?,?,?,?,?,?)")) {
+                q.setString(1, id); q.setString(2, node.world());
+                q.setDouble(3, node.position().x()); q.setDouble(4, node.position().y());
+                q.setDouble(5, node.position().z()); q.setDouble(6, speed); q.executeUpdate();
+            }
+            for (TrackNode other : graph.nodes()) {
+                if (other.id().equals(id) || !other.id().startsWith("rail:") || !other.world().equals(node.world())) continue;
+                if (node.position().distance(other.position()) <= 1.8) {
+                    graph.connect(id, other.id());
+                    persistEdge(id, other.id());
+                    persistEdge(other.id(), id);
+                }
+            }
+            getLogger().fine("Registered rail node " + id);
+        } catch (Exception e) { getLogger().warning("Could not register rail at " + location + ": " + e.getMessage()); }
+    }
+
+    private String railId(Block block) {
+        return "rail:" + block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
+    }
+
+    private void persistEdge(String from, String to) throws SQLException {
+        try (PreparedStatement q = db.prepareStatement("INSERT OR IGNORE INTO track_edges VALUES(?,?)")) {
+            q.setString(1, from); q.setString(2, to); q.executeUpdate();
+        }
+    }
+
+    private void tick() {
+        double dt = getConfig().getLong("simulation.tick-period", 1L) / 20.0;
+        for (RuntimeTrain train : trains.values()) {
+            if (train.blockedByWorld()) {
+                train.sim.emergencyStop();
+                train.world.playSound(train.simLocation(), Sound.BLOCK_ANVIL_LAND, 0.25f, 1.8f);
+            }
+            train.sim.tick(dt);
+            train.render();
+        }
+        trains.values().removeIf(t -> {
+            if (t.sim.finished() && t.sim.state() == TrainState.STOPPED) { t.remove(); return true; }
+            return false;
+        });
+    }
+
+    @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!(sender instanceof Player p)) { sender.sendMessage("This command currently requires a player."); return true; }
+        if (!p.hasPermission("pmf.admin")) { p.sendMessage("§cNo permission."); return true; }
+        if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
+            p.sendMessage("§6PMF commands");
+            p.sendMessage("§ePlace vanilla rails directly to create track nodes.");
+            p.sendMessage("§e/pmf track kit §7- get a rail-laying kit");
+            p.sendMessage("§e/pmf track list §7- list saved rail node IDs");
+            p.sendMessage("§e/pmf node add <id> [speed] §7- manual waypoint");
+            p.sendMessage("§e/pmf node connect <from> <to>");
+            p.sendMessage("§e/pmf train spawn <id> <node1,node2,...>");
+            p.sendMessage("§e/pmf train stop <id>  §e/pmf train list");
+            return true;
+        }
+        try {
+            if (args[0].equalsIgnoreCase("track")) trackCommand(p, args);
+            else if (args[0].equalsIgnoreCase("node")) nodeCommand(p, args);
+            else if (args[0].equalsIgnoreCase("train")) trainCommand(p, args);
+            else p.sendMessage("§cUnknown command. /pmf help");
+        } catch (Exception e) { p.sendMessage("§cPMF: " + e.getMessage()); }
+        return true;
+    }
+
+    private void trackCommand(Player p, String[] a) {
+        if (a.length == 2 && a[1].equalsIgnoreCase("kit")) {
+            p.getInventory().addItem(new ItemStack(Material.RAIL, 64),
+                    new ItemStack(Material.POWERED_RAIL, 32), new ItemStack(Material.REDSTONE_TORCH, 16));
+            p.sendMessage("§aRail kit added. Place rails normally; PMF records and connects them.");
+            return;
+        }
+        if (a.length == 2 && a[1].equalsIgnoreCase("list")) {
+            graph.nodes().stream().filter(n -> n.id().startsWith("rail:"))
+                    .forEach(n -> p.sendMessage("§e" + n.id() + " §7" + n.position()));
+            return;
+        }
+        throw new IllegalArgumentException("Usage: /pmf track kit|list");
+    }
+
+    private void nodeCommand(Player p, String[] a) throws SQLException {
+        if (a.length >= 3 && a[1].equalsIgnoreCase("add")) {
+            String id = a[2];
+            double speed = a.length >= 4 ? Double.parseDouble(a[3]) :
+                    getConfig().getDouble("simulation.max-speed-blocks-per-second", 8.0);
+            Location l = p.getLocation();
+            TrackNode n = new TrackNode(id, l.getWorld().getName(),
+                    new Vec3(l.getX(), l.getY(), l.getZ()), speed);
+            graph.addNode(n);
+            try (PreparedStatement q = db.prepareStatement("INSERT OR REPLACE INTO track_nodes VALUES(?,?,?,?,?,?)")) {
+                q.setString(1, id); q.setString(2, n.world()); q.setDouble(3, n.position().x());
+                q.setDouble(4, n.position().y()); q.setDouble(5, n.position().z()); q.setDouble(6, speed);
+                q.executeUpdate();
+            }
+            p.sendMessage("§aTrack node created: " + id); return;
+        }
+        if (a.length == 4 && a[1].equalsIgnoreCase("connect")) {
+            if (!graph.connect(a[2], a[3])) throw new IllegalArgumentException("Both nodes must exist.");
+            persistEdge(a[2], a[3]); persistEdge(a[3], a[2]);
+            p.sendMessage("§aConnected " + a[2] + " <-> " + a[3]); return;
+        }
+        if (a.length == 2 && a[1].equalsIgnoreCase("list")) {
+            graph.nodes().forEach(n -> p.sendMessage("§e" + n.id() + " §7" + n.world() + " " + n.position())); return;
+        }
+        throw new IllegalArgumentException("Usage: /pmf node add|connect|list ...");
+    }
+
+    private void trainCommand(Player p, String[] a) {
+        if (a.length == 4 && a[1].equalsIgnoreCase("spawn")) {
+            if (trains.containsKey(a[2])) throw new IllegalArgumentException("Train already exists.");
+            List<String> ids = Arrays.stream(a[3].split(",")).map(String::trim).toList();
+            List<TrackNode> route = graph.route(ids);
+            World w = Bukkit.getWorld(route.getFirst().world());
+            if (w == null) throw new IllegalArgumentException("Track world is not loaded.");
+            TrainSimulation sim = new TrainSimulation(a[2], route,
+                    getConfig().getDouble("simulation.max-speed-blocks-per-second", 8.0),
+                    getConfig().getDouble("simulation.acceleration", 1.2),
+                    getConfig().getDouble("simulation.braking", 2.0));
+            RuntimeTrain runtime = new RuntimeTrain(sim, w);
+            trains.put(a[2], runtime); sim.start();
+            p.sendMessage("§aTrain spawned: " + a[2]); return;
+        }
+        if (a.length == 3 && a[1].equalsIgnoreCase("stop")) {
+            RuntimeTrain t = trains.get(a[2]);
+            if (t == null) throw new IllegalArgumentException("Unknown train.");
+            t.sim.stop(); p.sendMessage("§eTrain braking: " + a[2]); return;
+        }
+        if (a.length == 2 && a[1].equalsIgnoreCase("list")) {
+            trains.values().forEach(t -> p.sendMessage("§e" + t.sim.id() + " §7" + t.sim.state()
+                    + " §f" + String.format(Locale.US, "%.2f", t.sim.speed()) + " blocks/s")); return;
+        }
+        throw new IllegalArgumentException("Usage: /pmf train spawn|stop|list ...");
+    }
+
+    private final class RuntimeTrain {
+        final TrainSimulation sim;
+        final World world;
+        final List<BlockDisplay> parts = new ArrayList<>();
+        final List<Slime> hitboxes = new ArrayList<>();
+
+        RuntimeTrain(TrainSimulation sim, World world) {
+            this.sim = sim; this.world = world;
+            if (!getConfig().getBoolean("render.enabled", true)) return;
+            for (int car = 0; car < 3; car++) {
+                int index = car;
+                spawnPart(Material.LIGHT_GRAY_CONCRETE, index, 0.0f, 0.0f, 2.45f, 1.05f, 3.1f);
+                spawnPart(Material.RED_CONCRETE, index, 0.0f, 0.30f, 2.48f, 0.16f, 3.12f);
+                spawnPart(Material.BLACK_STAINED_GLASS, index, 0.0f, 0.63f, 2.40f, 0.34f, 2.35f);
+                spawnPart(Material.RED_CONCRETE, index, 0.0f, 0.98f, 2.42f, 0.10f, 3.0f);
+            }
+            for (int car = 0; car < 3; car++) {
+                final int index = car;
+                Slime proxy = world.spawn(simLocation(), Slime.class, s -> {
+                    s.setSize(4); s.setAI(false); s.setAware(false); s.setSilent(true);
+                    s.setInvisible(true); s.setInvulnerable(true); s.setGravity(false);
+                    s.setCollidable(true); s.setPersistent(false); s.setRemoveWhenFarAway(false);
+                    s.setCustomName("PMF collision proxy"); s.setCustomNameVisible(false);
+                });
+                hitboxes.add(proxy);
+            }
+        }
+
+        private void spawnPart(Material material, int car, float y, float xScale,
+                               float width, float height, float length) {
+            BlockDisplay d = world.spawn(simLocation(), BlockDisplay.class, display -> {
+                display.setBlock(material.createBlockData());
+                display.setBillboard(Display.Billboard.FIXED);
+                display.setInterpolationDuration(1);
+                display.setPersistent(false);
+                display.setTransformation(new Transformation(new Vector3f(0, y, -car * 3.25f),
+                        new Quaternionf(), new Vector3f(width, height, length), new Quaternionf()));
+            });
+            parts.add(d);
+        }
+
+        Location simLocation() {
+            Vec3 v = sim.position();
+            return new Location(world, v.x(), v.y(), v.z());
+        }
+
+        private double yaw() {
+            List<TrackNode> route = sim.routeView();
+            int i = Math.min(sim.segmentIndex(), route.size() - 2);
+            Vec3 a = route.get(i).position(), b = route.get(i + 1).position();
+            return Math.atan2(b.x() - a.x(), b.z() - a.z());
+        }
+
+        boolean blockedByWorld() {
+            Location base = simLocation();
+            double angle = yaw();
+            for (int car = 0; car < 3; car++) {
+                double offset = -car * 3.25;
+                double cx = base.getX() + Math.sin(angle) * offset;
+                double cz = base.getZ() + Math.cos(angle) * offset;
+                for (double side : new double[]{-0.95, 0.95}) {
+                    for (double h : new double[]{0.45, 1.15}) {
+                        int x = (int) Math.floor(cx + Math.cos(angle) * side);
+                        int z = (int) Math.floor(cz - Math.sin(angle) * side);
+                        int y = (int) Math.floor(base.getY() + h);
+                        if (!world.getBlockAt(x, y, z).isPassable()) return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        void render() {
+            Location base = simLocation();
+            double angle = yaw();
+            Quaternionf rotation = new Quaternionf().rotateY((float) angle);
+            for (int i = 0; i < parts.size(); i++) {
+                BlockDisplay d = parts.get(i);
+                if (!d.isValid()) continue;
+                int car = i / 4;
+                d.teleport(base);
+                float y = switch (i % 4) { case 0 -> 0.0f; case 1 -> 0.30f; case 2 -> 0.63f; default -> 0.98f; };
+                float length = i % 4 == 2 ? 2.35f : 3.1f;
+                float width = i % 4 == 2 ? 2.40f : (i % 4 == 1 ? 2.48f : 2.45f);
+                float height = i % 4 == 0 ? 1.05f : (i % 4 == 1 ? 0.16f : (i % 4 == 2 ? 0.34f : 0.10f));
+                d.setTransformation(new Transformation(new Vector3f(0, y, -car * 3.25f),
+                        rotation, new Vector3f(width, height, length), new Quaternionf()));
+            }
+            for (int car = 0; car < hitboxes.size(); car++) {
+                Slime proxy = hitboxes.get(car);
+                if (!proxy.isValid()) continue;
+                double offset = -car * 3.25;
+                proxy.teleport(new Location(world, base.getX() + Math.sin(angle) * offset,
+                        base.getY() + 0.35, base.getZ() + Math.cos(angle) * offset));
+            }
+        }
+
+        void remove() {
+            parts.forEach(e -> { if (e.isValid()) e.remove(); });
+            hitboxes.forEach(e -> { if (e.isValid()) e.remove(); });
+        }
+    }
 }

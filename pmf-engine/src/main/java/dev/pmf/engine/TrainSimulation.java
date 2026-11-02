@@ -9,9 +9,14 @@ public final class TrainSimulation {
   if(route.size()<2)throw new IllegalArgumentException("Route requires at least two nodes");
   this.id=id;this.route=List.copyOf(route);this.maxSpeed=maxSpeed;this.acceleration=acceleration;this.braking=braking;
  }
- public String id(){return id;} public double speed(){return speed;} public TrainState state(){return state;} public boolean finished(){return segment>=route.size()-1;}
+ public String id(){return id;} public double speed(){return speed;} public TrainState state(){return state;}
+ public boolean finished(){return segment>=route.size()-1;}
+ public int segmentIndex(){return segment;}
+ public List<TrackNode> routeView(){return route;}
  public void start(){if(!finished()&&state!=TrainState.FAULT)state=TrainState.RUNNING;}
  public void stop(){if(state==TrainState.RUNNING)state=TrainState.BRAKING;}
+ /** Immediate protective stop, used when the consist detects an obstruction. */
+ public void emergencyStop(){speed=0;state=TrainState.FAULT;}
  public Vec3 position(){
   if(finished())return route.get(route.size()-1).position();
   Vec3 a=route.get(segment).position(),b=route.get(segment+1).position();double length=a.distance(b);
