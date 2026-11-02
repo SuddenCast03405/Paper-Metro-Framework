@@ -265,39 +265,64 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
     private final class RuntimeTrain {
         final TrainSimulation sim;
         final World world;
-        final List<BlockDisplay> parts = new ArrayList<>();
+        final List<ModelPiece> parts = new ArrayList<>();
         final List<Slime> hitboxes = new ArrayList<>();
 
         RuntimeTrain(TrainSimulation sim, World world) {
-            this.sim = sim; this.world = world;
+            this.sim = sim;
+            this.world = world;
             if (!getConfig().getBoolean("render.enabled", true)) return;
+
+            // Each carriage is assembled from separate display pieces. Dimensions are
+            // deliberately kept in Minecraft blocks so the body reads as a metro car,
+            // rather than a single oversized cube.
             for (int car = 0; car < 3; car++) {
-                spawnPart(Material.LIGHT_GRAY_CONCRETE, 0.0f, 2.45f, 1.05f, 3.1f);
-                spawnPart(Material.RED_CONCRETE, 0.30f, 2.48f, 0.16f, 3.12f);
-                spawnPart(Material.BLACK_STAINED_GLASS, 0.63f, 2.40f, 0.34f, 2.35f);
-                spawnPart(Material.RED_CONCRETE, 0.98f, 2.42f, 0.10f, 3.0f);
+                addPart(Material.POLISHED_BLACKSTONE, 0.0f, 0.10f, 0.0f, 2.28f, 0.28f, 2.92f); // underframe
+                addPart(Material.LIGHT_GRAY_CONCRETE, 0.0f, 0.42f, 0.0f, 2.38f, 1.10f, 3.02f); // lower shell
+                addPart(Material.RED_CONCRETE, 0.0f, 0.83f, 0.0f, 2.40f, 0.17f, 3.04f); // red waist stripe
+                addPart(Material.BLACK_STAINED_GLASS, 0.0f, 1.10f, 0.0f, 2.37f, 0.52f, 2.82f); // continuous window band
+                addPart(Material.LIGHT_GRAY_CONCRETE, 0.0f, 1.60f, 0.0f, 2.36f, 0.42f, 3.00f); // upper shell
+                addPart(Material.SMOOTH_QUARTZ, 0.0f, 1.99f, 0.0f, 2.22f, 0.16f, 2.84f); // roof
+                addPart(Material.DEEPSLATE_TILES, 0.0f, 0.03f, -0.91f, 1.48f, 0.30f, 0.66f); // bogie 1
+                addPart(Material.DEEPSLATE_TILES, 0.0f, 0.03f, 0.91f, 1.48f, 0.30f, 0.66f); // bogie 2
+                addPart(Material.RED_CONCRETE, 0.0f, 1.03f, -1.51f, 2.24f, 0.82f, 0.10f); // end face
+                addPart(Material.RED_CONCRETE, 0.0f, 1.03f, 1.51f, 2.24f, 0.82f, 0.10f); // end face
+                addPart(Material.LIGHT_BLUE_STAINED_GLASS, 0.0f, 1.23f, -1.57f, 1.25f, 0.45f, 0.035f); // end glazing
+                addPart(Material.LIGHT_BLUE_STAINED_GLASS, 0.0f, 1.23f, 1.57f, 1.25f, 0.45f, 0.035f); // end glazing
             }
+
             for (int car = 0; car < 3; car++) {
-                Slime proxy = world.spawn(simLocation(), Slime.class, s -> {
-                    s.setSize(4); s.setAI(false); s.setAware(false); s.setSilent(true);
-                    s.setInvisible(true); s.setInvulnerable(true); s.setGravity(false);
-                    s.setCollidable(true); s.setPersistent(false); s.setRemoveWhenFarAway(false);
-                    s.setCustomName("PMF collision proxy"); s.setCustomNameVisible(false);
+                Slime proxy = world.spawn(simLocation(), Slime.class, slime -> {
+                    slime.setSize(2);
+                    slime.setAI(false);
+                    slime.setAware(false);
+                    slime.setSilent(true);
+                    slime.setInvisible(true);
+                    slime.setInvulnerable(true);
+                    slime.setGravity(false);
+                    slime.setCollidable(true);
+                    slime.setPersistent(false);
+                    slime.setRemoveWhenFarAway(false);
+                    slime.setCustomName("PMF collision proxy");
+                    slime.setCustomNameVisible(false);
                 });
                 hitboxes.add(proxy);
             }
         }
 
-        private void spawnPart(Material material, float y, float width, float height, float length) {
-            BlockDisplay d = world.spawn(simLocation(), BlockDisplay.class, display -> {
-                display.setBlock(material.createBlockData());
-                display.setBillboard(Display.Billboard.FIXED);
-                display.setInterpolationDuration(1);
-                display.setPersistent(false);
-                display.setTransformation(new Transformation(new Vector3f(0, y, 0),
-                        new Quaternionf(), new Vector3f(width, height, length), new Quaternionf()));
+        private void addPart(Material material, float x, float y, float z,
+                             float width, float height, float length) {
+            Vector3f translation = new Vector3f(x, y, z);
+            Vector3f scale = new Vector3f(width, height, length);
+            BlockDisplay display = world.spawn(simLocation(), BlockDisplay.class, entity -> {
+                entity.setBlock(material.createBlockData());
+                entity.setBillboard(Display.Billboard.FIXED);
+                entity.setInterpolationDuration(1);
+                entity.setPersistent(false);
+                entity.setTransformation(new Transformation(new Vector3f(translation),
+                        new Quaternionf(), new Vector3f(scale), new Quaternionf()));
             });
-            parts.add(d);
+            parts.add(new ModelPiece(display, translation, scale));
         }
 
         Location simLocation() {
@@ -308,20 +333,22 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         private double yaw() {
             List<TrackNode> route = sim.routeView();
             int i = Math.min(sim.segmentIndex(), route.size() - 2);
-            Vec3 a = route.get(i).position(), b = route.get(i + 1).position();
+            Vec3 a = route.get(i).position();
+            Vec3 b = route.get(i + 1).position();
             return Math.atan2(b.x() - a.x(), b.z() - a.z());
         }
 
         boolean blockedByWorld() {
             Location base = simLocation();
             double angle = yaw();
+            // Sample the full three-car envelope at underframe, window and roof height.
             for (int car = 0; car < 3; car++) {
                 double offset = -car * 3.25;
                 double cx = base.getX() + Math.sin(angle) * offset;
                 double cz = base.getZ() + Math.cos(angle) * offset;
-                for (double along : new double[]{-1.25, 0.0, 1.25}) {
-                    for (double side : new double[]{-0.95, 0.95}) {
-                        for (double h : new double[]{0.45, 1.15}) {
+                for (double along : new double[]{-1.30, 0.0, 1.30}) {
+                    for (double side : new double[]{-1.12, 1.12}) {
+                        for (double h : new double[]{0.35, 0.95, 1.55, 2.05}) {
                             int x = (int) Math.floor(cx + Math.sin(angle) * along + Math.cos(angle) * side);
                             int z = (int) Math.floor(cz + Math.cos(angle) * along - Math.sin(angle) * side);
                             int y = (int) Math.floor(base.getY() + h);
@@ -339,27 +366,35 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             Quaternionf rotation = new Quaternionf().rotateY((float) angle);
             for (int car = 0; car < 3; car++) {
                 double offset = -car * 3.25;
-                Location center = new Location(world, base.getX() + Math.sin(angle) * offset,
-                        base.getY(), base.getZ() + Math.cos(angle) * offset);
-                for (int part = 0; part < 4; part++) {
-                    BlockDisplay d = parts.get(car * 4 + part);
-                    if (!d.isValid()) continue;
-                    float y = switch (part) { case 0 -> 0.0f; case 1 -> 0.30f; case 2 -> 0.63f; default -> 0.98f; };
-                    float length = part == 2 ? 2.35f : (part == 1 ? 3.12f : (part == 3 ? 3.0f : 3.1f));
-                    float width = part == 2 ? 2.40f : (part == 1 ? 2.48f : 2.45f);
-                    float height = part == 0 ? 1.05f : (part == 1 ? 0.16f : (part == 2 ? 0.34f : 0.10f));
-                    d.teleport(center);
-                    d.setTransformation(new Transformation(new Vector3f(0, y, 0), rotation,
-                            new Vector3f(width, height, length), new Quaternionf()));
+                Location center = new Location(world,
+                        base.getX() + Math.sin(angle) * offset,
+                        base.getY(),
+                        base.getZ() + Math.cos(angle) * offset);
+                int first = car * 12;
+                for (int i = 0; i < 12; i++) {
+                    ModelPiece piece = parts.get(first + i);
+                    BlockDisplay display = piece.entity();
+                    if (!display.isValid()) continue;
+                    display.teleport(center);
+                    display.setTransformation(new Transformation(
+                            new Vector3f(piece.translation()), new Quaternionf(rotation),
+                            new Vector3f(piece.scale()), new Quaternionf()));
                 }
                 Slime proxy = hitboxes.get(car);
-                if (proxy.isValid()) proxy.teleport(center.clone().add(0, 0.35, 0));
+                if (proxy.isValid()) proxy.teleport(center.clone().add(0, 1.0, 0));
             }
         }
 
         void remove() {
-            parts.forEach(e -> { if (e.isValid()) e.remove(); });
-            hitboxes.forEach(e -> { if (e.isValid()) e.remove(); });
+            parts.forEach(piece -> {
+                if (piece.entity().isValid()) piece.entity().remove();
+            });
+            hitboxes.forEach(entity -> {
+                if (entity.isValid()) entity.remove();
+            });
         }
     }
+
+    private record ModelPiece(BlockDisplay entity, Vector3f translation, Vector3f scale) { }
+
 }
