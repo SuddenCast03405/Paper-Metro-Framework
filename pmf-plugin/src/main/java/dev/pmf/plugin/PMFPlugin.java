@@ -7,9 +7,10 @@ import org.bukkit.block.Block;
 import org.bukkit.command.*;
 import org.bukkit.entity.*;
 import org.bukkit.event.*;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.util.Transformation;
 import org.joml.Quaternionf;
@@ -19,10 +20,7 @@ import java.io.File;
 import java.sql.*;
 import java.util.*;
 
-/**
- * Paper-side adapter. Rails are real vanilla rail blocks; display entities are visual only.
- * Slimes are invisible server-side collision proxies because Display entities have no hitbox.
- */
+/** Paper adapter: real vanilla rail blocks, display-only visuals and server-side collision proxies. */
 public final class PMFPlugin extends JavaPlugin implements CommandExecutor, Listener {
     private Connection db;
     private final TrackGraph graph = new TrackGraph();
@@ -74,22 +72,38 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         }
     }
 
-    /** Vanilla rail placement creates persistent graph nodes and joins adjacent placed rails. */
     @EventHandler(ignoreCancelled = true)
     public void onRailPlace(BlockPlaceEvent event) {
-        Material type = event.getBlockPlaced().getType();
-        if (type != Material.RAIL && type != Material.POWERED_RAIL
-                && type != Material.DETECTOR_RAIL && type != Material.ACTIVATOR_RAIL) return;
+        if (!isRail(event.getBlockPlaced().getType())) return;
         Location location = event.getBlockPlaced().getLocation();
         Bukkit.getScheduler().runTask(this, () -> registerRail(location));
     }
 
+    @EventHandler(ignoreCancelled = true)
+    public void onRailBreak(BlockBreakEvent event) {
+        Block block = event.getBlock();
+        if (!isRail(block.getType())) return;
+        String id = railId(block);
+        Bukkit.getScheduler().runTask(this, () -> unregisterRail(id));
+    }
+
+    /** Prevent the invisible slime collision proxies from ever damaging players or mobs. */
+    @EventHandler
+    public void onProxyDamage(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Slime slime
+                && "PMF collision proxy".equals(slime.getCustomName())) event.setCancelled(true);
+    }
+
+    private boolean isRail(Material type) {
+        return type == Material.RAIL || type == Material.POWERED_RAIL
+                || type == Material.DETECTOR_RAIL || type == Material.ACTIVATOR_RAIL;
+    }
+
     private void registerRail(Location location) {
         Block block = location.getBlock();
-        if (block.getType() != Material.RAIL && block.getType() != Material.POWERED_RAIL
-                && block.getType() != Material.DETECTOR_RAIL && block.getType() != Material.ACTIVATOR_RAIL) return;
+        if (!isRail(block.getType())) return;
         String id = railId(block);
-        if (graph.nodes().stream().anyMatch(n -> n.id().equals(id))) return;
+        if (graph.node(id) != null) return;
         double speed = getConfig().getDouble("simulation.max-speed-blocks-per-second", 8.0);
         TrackNode node = new TrackNode(id, block.getWorld().getName(),
                 new Vec3(block.getX() + 0.5, block.getY() + 0.12, block.getZ() + 0.5), speed);
@@ -108,8 +122,19 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
                     persistEdge(other.id(), id);
                 }
             }
-            getLogger().fine("Registered rail node " + id);
         } catch (Exception e) { getLogger().warning("Could not register rail at " + location + ": " + e.getMessage()); }
+    }
+
+    private void unregisterRail(String id) {
+        graph.removeNode(id);
+        try (PreparedStatement e = db.prepareStatement("DELETE FROM track_edges WHERE from_id=? OR to_id=?");
+             PreparedStatement n = db.prepareStatement("DELETE FROM track_nodes WHERE id=?")) {
+            e.setString(1, id); e.setString(2, id); e.executeUpdate();
+            n.setString(1, id); n.executeUpdate();
+        } catch (SQLException ex) { getLogger().warning("Could not remove rail node " + id + ": " + ex.getMessage()); }
+        for (RuntimeTrain train : trains.values()) {
+            if (train.sim.routeView().stream().anyMatch(node -> node.id().equals(id))) train.sim.emergencyStop();
+        }
     }
 
     private String railId(Block block) {
@@ -125,17 +150,13 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
     private void tick() {
         double dt = getConfig().getLong("simulation.tick-period", 1L) / 20.0;
         for (RuntimeTrain train : trains.values()) {
-            if (train.blockedByWorld()) {
+            if (train.sim.state() != TrainState.FAULT && train.blockedByWorld()) {
                 train.sim.emergencyStop();
                 train.world.playSound(train.simLocation(), Sound.BLOCK_ANVIL_LAND, 0.25f, 1.8f);
             }
             train.sim.tick(dt);
             train.render();
         }
-        trains.values().removeIf(t -> {
-            if (t.sim.finished() && t.sim.state() == TrainState.STOPPED) { t.remove(); return true; }
-            return false;
-        });
     }
 
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -182,8 +203,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             double speed = a.length >= 4 ? Double.parseDouble(a[3]) :
                     getConfig().getDouble("simulation.max-speed-blocks-per-second", 8.0);
             Location l = p.getLocation();
-            TrackNode n = new TrackNode(id, l.getWorld().getName(),
-                    new Vec3(l.getX(), l.getY(), l.getZ()), speed);
+            TrackNode n = new TrackNode(id, l.getWorld().getName(), new Vec3(l.getX(), l.getY(), l.getZ()), speed);
             graph.addNode(n);
             try (PreparedStatement q = db.prepareStatement("INSERT OR REPLACE INTO track_nodes VALUES(?,?,?,?,?,?)")) {
                 q.setString(1, id); q.setString(2, n.world()); q.setDouble(3, n.position().x());
@@ -240,14 +260,12 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             this.sim = sim; this.world = world;
             if (!getConfig().getBoolean("render.enabled", true)) return;
             for (int car = 0; car < 3; car++) {
-                int index = car;
-                spawnPart(Material.LIGHT_GRAY_CONCRETE, index, 0.0f, 0.0f, 2.45f, 1.05f, 3.1f);
-                spawnPart(Material.RED_CONCRETE, index, 0.0f, 0.30f, 2.48f, 0.16f, 3.12f);
-                spawnPart(Material.BLACK_STAINED_GLASS, index, 0.0f, 0.63f, 2.40f, 0.34f, 2.35f);
-                spawnPart(Material.RED_CONCRETE, index, 0.0f, 0.98f, 2.42f, 0.10f, 3.0f);
+                spawnPart(Material.LIGHT_GRAY_CONCRETE, 0.0f, 2.45f, 1.05f, 3.1f);
+                spawnPart(Material.RED_CONCRETE, 0.30f, 2.48f, 0.16f, 3.12f);
+                spawnPart(Material.BLACK_STAINED_GLASS, 0.63f, 2.40f, 0.34f, 2.35f);
+                spawnPart(Material.RED_CONCRETE, 0.98f, 2.42f, 0.10f, 3.0f);
             }
             for (int car = 0; car < 3; car++) {
-                final int index = car;
                 Slime proxy = world.spawn(simLocation(), Slime.class, s -> {
                     s.setSize(4); s.setAI(false); s.setAware(false); s.setSilent(true);
                     s.setInvisible(true); s.setInvulnerable(true); s.setGravity(false);
@@ -258,14 +276,13 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             }
         }
 
-        private void spawnPart(Material material, int car, float y, float xScale,
-                               float width, float height, float length) {
+        private void spawnPart(Material material, float y, float width, float height, float length) {
             BlockDisplay d = world.spawn(simLocation(), BlockDisplay.class, display -> {
                 display.setBlock(material.createBlockData());
                 display.setBillboard(Display.Billboard.FIXED);
                 display.setInterpolationDuration(1);
                 display.setPersistent(false);
-                display.setTransformation(new Transformation(new Vector3f(0, y, -car * 3.25f),
+                display.setTransformation(new Transformation(new Vector3f(0, y, 0),
                         new Quaternionf(), new Vector3f(width, height, length), new Quaternionf()));
             });
             parts.add(d);
@@ -290,12 +307,14 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
                 double offset = -car * 3.25;
                 double cx = base.getX() + Math.sin(angle) * offset;
                 double cz = base.getZ() + Math.cos(angle) * offset;
-                for (double side : new double[]{-0.95, 0.95}) {
-                    for (double h : new double[]{0.45, 1.15}) {
-                        int x = (int) Math.floor(cx + Math.cos(angle) * side);
-                        int z = (int) Math.floor(cz - Math.sin(angle) * side);
-                        int y = (int) Math.floor(base.getY() + h);
-                        if (!world.getBlockAt(x, y, z).isPassable()) return true;
+                for (double along : new double[]{-1.25, 0.0, 1.25}) {
+                    for (double side : new double[]{-0.95, 0.95}) {
+                        for (double h : new double[]{0.45, 1.15}) {
+                            int x = (int) Math.floor(cx + Math.sin(angle) * along + Math.cos(angle) * side);
+                            int z = (int) Math.floor(cz + Math.cos(angle) * along - Math.sin(angle) * side);
+                            int y = (int) Math.floor(base.getY() + h);
+                            if (!world.getBlockAt(x, y, z).isPassable()) return true;
+                        }
                     }
                 }
             }
@@ -306,24 +325,23 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             Location base = simLocation();
             double angle = yaw();
             Quaternionf rotation = new Quaternionf().rotateY((float) angle);
-            for (int i = 0; i < parts.size(); i++) {
-                BlockDisplay d = parts.get(i);
-                if (!d.isValid()) continue;
-                int car = i / 4;
-                d.teleport(base);
-                float y = switch (i % 4) { case 0 -> 0.0f; case 1 -> 0.30f; case 2 -> 0.63f; default -> 0.98f; };
-                float length = i % 4 == 2 ? 2.35f : 3.1f;
-                float width = i % 4 == 2 ? 2.40f : (i % 4 == 1 ? 2.48f : 2.45f);
-                float height = i % 4 == 0 ? 1.05f : (i % 4 == 1 ? 0.16f : (i % 4 == 2 ? 0.34f : 0.10f));
-                d.setTransformation(new Transformation(new Vector3f(0, y, -car * 3.25f),
-                        rotation, new Vector3f(width, height, length), new Quaternionf()));
-            }
-            for (int car = 0; car < hitboxes.size(); car++) {
-                Slime proxy = hitboxes.get(car);
-                if (!proxy.isValid()) continue;
+            for (int car = 0; car < 3; car++) {
                 double offset = -car * 3.25;
-                proxy.teleport(new Location(world, base.getX() + Math.sin(angle) * offset,
-                        base.getY() + 0.35, base.getZ() + Math.cos(angle) * offset));
+                Location center = new Location(world, base.getX() + Math.sin(angle) * offset,
+                        base.getY(), base.getZ() + Math.cos(angle) * offset);
+                for (int part = 0; part < 4; part++) {
+                    BlockDisplay d = parts.get(car * 4 + part);
+                    if (!d.isValid()) continue;
+                    float y = switch (part) { case 0 -> 0.0f; case 1 -> 0.30f; case 2 -> 0.63f; default -> 0.98f; };
+                    float length = part == 2 ? 2.35f : (part == 1 ? 3.12f : (part == 3 ? 3.0f : 3.1f));
+                    float width = part == 2 ? 2.40f : (part == 1 ? 2.48f : 2.45f);
+                    float height = part == 0 ? 1.05f : (part == 1 ? 0.16f : (part == 2 ? 0.34f : 0.10f));
+                    d.teleport(center);
+                    d.setTransformation(new Transformation(new Vector3f(0, y, 0), rotation,
+                            new Vector3f(width, height, length), new Quaternionf()));
+                }
+                Slime proxy = hitboxes.get(car);
+                if (proxy.isValid()) proxy.teleport(center.clone().add(0, 0.35, 0));
             }
         }
 

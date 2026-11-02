@@ -6,6 +6,7 @@ public final class TrackGraph {
  private final Map<String,Set<String>> edges=new HashMap<>();
  public void addNode(TrackNode node){nodes.put(node.id(),node);edges.computeIfAbsent(node.id(),k->new LinkedHashSet<>());}
  public boolean connect(String a,String b){if(!nodes.containsKey(a)||!nodes.containsKey(b))return false;edges.computeIfAbsent(a,k->new LinkedHashSet<>()).add(b);edges.computeIfAbsent(b,k->new LinkedHashSet<>()).add(a);return true;}
+ public void removeNode(String id){nodes.remove(id);edges.remove(id);for(Set<String> adjacent:edges.values())adjacent.remove(id);}
  public TrackNode node(String id){return nodes.get(id);}
  public Collection<TrackNode> nodes(){return Collections.unmodifiableCollection(nodes.values());}
  public List<TrackNode> route(List<String> ids){
