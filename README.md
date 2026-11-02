@@ -4,11 +4,11 @@
 An original modular transit simulation framework for **Paper 1.21.8**. The server owns simulation and rendering; players do not need client-side mods. PMF does not depend on a hybrid server, TrainCarts or BKCommonLib.
 
 ## Current playable prototype
-- Place vanilla rails (normal, powered, detector or activator rails) directly in the world. PMF records each placed rail as a track node and links nearby rail nodes in SQLite.
+- Place vanilla rails (normal, powered, detector or activator rails) directly in the world. PMF records each placed rail as a track node and derives links from vanilla straight, corner and ascending rail shapes in SQLite.
 - `/pmf track kit` gives a starter bundle; `/pmf track list` prints the generated route-node IDs.
 - `/pmf train spawn <id> <start-node> <end-node>` automatically finds a shortest connected route through the placed rails.
 - For manual control, `/pmf train spawn <id> <node1,node2,...>` still accepts an explicit node sequence.
-- The train renderer now uses a three-car, layered light-grey/red/black-glass display consist instead of a single iron block.
+- The train renderer now uses a three-car layered metro silhouette: silver body shells, roof, continuous dark window bands, red waist stripe, end glazing, underframes and separate bogies.
 - Display entities are visual only. PMF therefore creates invisible server-side Slime collision proxies for each car and checks the consist's sampled volume against solid blocks, triggering a protective stop on obstruction.
 
 ## Requirements
@@ -42,7 +42,7 @@ GitHub Actions runs the build and unit tests on pushes, pull requests and manual
 Permission: `pmf.admin` (default: operator).
 
 ## Known limitations
-This is an early implementation, not a finished DKZ5 model. The consist is built from scaled vanilla block displays, not a custom resource-pack mesh; the collision proxies are approximate, and block obstruction sampling is not a complete swept-volume physics engine. Track connections are inferred from nearby rail nodes and do not yet interpret all vanilla rail shapes, slopes, switches or crossings. Rail breaking/removal synchronization, automatic pathfinding, curves, bogies, doors, passenger seating, stations, signalling, timetables, MySQL and schema migrations remain future work. Do not use this prototype for real-world safety-critical control.
+This is an early implementation, not a finished DKZ5 model. The consist is built from scaled vanilla block displays, not a custom resource-pack mesh; the collision proxies are approximate, and block obstruction sampling is not a complete swept-volume physics engine. Rail topology follows vanilla straight, corner and ascending shapes; complex junctions, switches, crossings and full 3D curve interpolation are not yet implemented. Rail breaking/removal synchronization, automatic pathfinding, curves, bogies, doors, passenger seating, stations, signalling, timetables, MySQL and schema migrations remain future work. Do not use this prototype for real-world safety-critical control.
 
 All Bukkit world/entity access must remain on the server thread.
 See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
