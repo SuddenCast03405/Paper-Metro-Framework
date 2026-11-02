@@ -21,4 +21,10 @@ class TrackGraphTest {
   assertThrows(IllegalArgumentException.class,()->graph.route(List.of("A","B")));
   assertThrows(IllegalArgumentException.class,()->graph.route(List.of("B","C")));
  }
+ @Test void automaticallyFindsShortestConnectedRoute(){
+  TrackGraph graph=new TrackGraph();graph.addNode(node("A","world",0));graph.addNode(node("B","world",10));graph.addNode(node("C","world",20));graph.addNode(node("D","world",30));
+  graph.connect("A","B");graph.connect("B","C");graph.connect("A","D");graph.connect("D","C");
+  assertEquals(List.of("A","B","C"),graph.findRoute("A","C").stream().map(TrackNode::id).toList());
+  assertThrows(IllegalArgumentException.class,()->graph.findRoute("A","missing"));
+ }
 }

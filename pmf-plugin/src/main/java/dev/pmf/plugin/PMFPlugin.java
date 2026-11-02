@@ -176,7 +176,8 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             p.sendMessage("§e/pmf track list §7- list saved rail node IDs");
             p.sendMessage("§e/pmf node add <id> [speed] §7- manual waypoint");
             p.sendMessage("§e/pmf node connect <from> <to>");
-            p.sendMessage("§e/pmf train spawn <id> <node1,node2,...>");
+            p.sendMessage("§e/pmf train spawn <id> <start-node> <end-node>");
+            p.sendMessage("§e/pmf train spawn <id> <node1,node2,...> §7- explicit route");
             p.sendMessage("§e/pmf train stop <id>  §e/pmf train list");
             return true;
         }
@@ -231,10 +232,14 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
     }
 
     private void trainCommand(Player p, String[] a) {
-        if (a.length == 4 && a[1].equalsIgnoreCase("spawn")) {
+        if ((a.length == 4 || a.length == 5) && a[1].equalsIgnoreCase("spawn")) {
             if (trains.containsKey(a[2])) throw new IllegalArgumentException("Train already exists.");
-            List<String> ids = Arrays.stream(a[3].split(",")).map(String::trim).toList();
-            List<TrackNode> route = graph.route(ids);
+            List<TrackNode> route;
+            if (a.length == 5) route = graph.findRoute(a[3], a[4]);
+            else {
+                List<String> ids = Arrays.stream(a[3].split(",")).map(String::trim).toList();
+                route = graph.route(ids);
+            }
             World w = Bukkit.getWorld(route.getFirst().world());
             if (w == null) throw new IllegalArgumentException("Track world is not loaded.");
             TrainSimulation sim = new TrainSimulation(a[2], route,
