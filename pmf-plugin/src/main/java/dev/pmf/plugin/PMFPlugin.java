@@ -61,11 +61,29 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
                 s.executeUpdate("CREATE TABLE IF NOT EXISTS track_nodes (id TEXT PRIMARY KEY, world TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, speed_limit REAL NOT NULL)");
                 s.executeUpdate("CREATE TABLE IF NOT EXISTS track_edges (from_id TEXT NOT NULL, to_id TEXT NOT NULL, PRIMARY KEY(from_id,to_id))");
             }
+            purgeLegacyVanillaRailCapture();
             loadGraph();
             return true;
         } catch (Exception e) {
             getLogger().severe("SQLite initialization failed: " + e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Previous prototype builds automatically captured every vanilla rail. Those
+     * unowned graph records must not survive the namespace-isolation upgrade:
+     * remove only their PMF database metadata, never the actual world blocks.
+     */
+    private void purgeLegacyVanillaRailCapture() throws SQLException {
+        try (Statement s = db.createStatement()) {
+            s.executeUpdate("DELETE FROM track_edges WHERE from_id LIKE 'rail:%' OR to_id LIKE 'rail:%'");
+            int removed = s.executeUpdate("DELETE FROM track_nodes WHERE id LIKE 'rail:%'");
+            if (removed > 0) {
+                getLogger().info("Removed " + removed
+                        + " legacy auto-captured vanilla rail nodes from PMF storage. World rail blocks were not changed; "
+                        + "rebuild PMF routes using /pmf track kit.");
+            }
         }
     }
 

@@ -6,6 +6,7 @@ An original modular transit simulation framework for **Paper 1.21.8**. The serve
 ## Current playable prototype
 - `/pmf track kit` gives PMF-tagged standard and powered rail items. Their item identity is namespaced with the plugin's `pmf:rail` PersistentDataContainer key; the placed block remains a vanilla rail for client compatibility.
 - PMF registers only rails placed from its tagged items. Ordinary vanilla rails, including existing player-built railways, are ignored and are not modified. `/pmf track list` prints PMF-owned route-node IDs.
+- On upgrade from the earlier prototype, legacy auto-captured `rail:` graph records are removed from PMF's SQLite database; the physical vanilla rail blocks are never changed. Rebuild any intended PMF line with the PMF rail kit.
 - Track connectivity still follows the placed vanilla rail's straight, corner and ascending block shape; PMF stores the network and route graph separately in SQLite.
 - `/pmf train spawn <id> <start-node> <end-node>` automatically finds a shortest connected route through the placed rails.
 - For manual control, `/pmf train spawn <id> <node1,node2,...>` still accepts an explicit node sequence.
