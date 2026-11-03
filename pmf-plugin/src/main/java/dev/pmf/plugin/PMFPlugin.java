@@ -62,6 +62,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
                 s.executeUpdate("CREATE TABLE IF NOT EXISTS track_nodes (id TEXT PRIMARY KEY, world TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, speed_limit REAL NOT NULL)");
                 s.executeUpdate("CREATE TABLE IF NOT EXISTS track_edges (from_id TEXT NOT NULL, to_id TEXT NOT NULL, PRIMARY KEY(from_id,to_id))");
                 s.executeUpdate("CREATE TABLE IF NOT EXISTS track_components (id TEXT PRIMARY KEY, component_type TEXT NOT NULL, world TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL)");
+                s.executeUpdate("CREATE TABLE IF NOT EXISTS track_switches (id TEXT PRIMARY KEY, world TEXT NOT NULL, stem_node TEXT NOT NULL, straight_node TEXT NOT NULL, diverging_node TEXT NOT NULL, selected_route TEXT NOT NULL)");
             }
             purgeLegacyVanillaRailCapture();
             loadGraph();
@@ -118,6 +119,17 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         }
         try (Statement s = db.createStatement(); ResultSet r = s.executeQuery("SELECT from_id,to_id FROM track_edges")) {
             while (r.next()) graph.connect(r.getString(1), r.getString(2));
+        }
+        try (Statement s = db.createStatement(); ResultSet r = s.executeQuery(
+                "SELECT id,world,stem_node,straight_node,diverging_node,selected_route FROM track_switches")) {
+            while (r.next()) {
+                try {
+                    graph.registerSwitch(new TrackSwitch(r.getString(1), r.getString(2), r.getString(3),
+                            r.getString(4), r.getString(5), SwitchRoute.valueOf(r.getString(6))));
+                } catch (IllegalArgumentException invalid) {
+                    getLogger().warning("Skipping invalid saved switch " + r.getString(1) + ": " + invalid.getMessage());
+                }
+            }
         }
     }
 
@@ -179,6 +191,10 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
     }
 
     private void unregisterRail(String id) {
+        List<TrackSwitch> dependentSwitches = graph.switches().stream()
+                .filter(turnout -> turnout.stemNodeId().equals(id)
+                        || turnout.straightNodeId().equals(id) || turnout.divergingNodeId().equals(id)).toList();
+        dependentSwitches.forEach(turnout -> deleteSwitchRecord(turnout.id()));
         graph.removeNode(id);
         components.remove(id);
         try (PreparedStatement e = db.prepareStatement("DELETE FROM track_edges WHERE from_id=? OR to_id=?");
@@ -337,6 +353,9 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             p.sendMessage("§ePlace PMF-tagged rails to create PMF track nodes; ordinary vanilla rails are ignored.");
             p.sendMessage("§e/pmf track kit §7- get PMF-namespaced rail items");
             p.sendMessage("§e/pmf track list §7- list saved rail node IDs");
+            p.sendMessage("§e/pmf switch create <id> <stem> <straight> <diverging>");
+            p.sendMessage("§e/pmf switch set <id> straight|diverging §7- change route (locked by active trains)");
+            p.sendMessage("§e/pmf switch list §7- list registered PMF switches");
             p.sendMessage("§e/pmf node add <id> [speed] §7- manual waypoint");
             p.sendMessage("§e/pmf node connect <from> <to>");
             p.sendMessage("§e/pmf train spawn <id> <start-node> <end-node>");
@@ -346,6 +365,7 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
         }
         try {
             if (args[0].equalsIgnoreCase("track")) trackCommand(p, args);
+            else if (args[0].equalsIgnoreCase("switch")) switchCommand(p, args);
             else if (args[0].equalsIgnoreCase("node")) nodeCommand(p, args);
             else if (args[0].equalsIgnoreCase("train")) trainCommand(p, args);
             else p.sendMessage("§cUnknown command. /pmf help");
@@ -367,6 +387,78 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             return;
         }
         throw new IllegalArgumentException("Usage: /pmf track kit|list");
+    }
+
+    private void switchCommand(Player p, String[] a) throws SQLException {
+        if (a.length == 6 && a[1].equalsIgnoreCase("create")) {
+            String id = a[2];
+            if (graph.trackSwitch(id) != null) throw new IllegalArgumentException("Switch ID already exists.");
+            TrackNode stem = graph.node(a[3]);
+            TrackNode straight = graph.node(a[4]);
+            TrackNode diverging = graph.node(a[5]);
+            if (stem == null || straight == null || diverging == null)
+                throw new IllegalArgumentException("All three node IDs must exist.");
+            TrackSwitch turnout = new TrackSwitch(id, stem.world(), stem.id(), straight.id(), diverging.id(),
+                    SwitchRoute.STRAIGHT);
+            graph.registerSwitch(turnout);
+            try {
+                persistSwitch(turnout);
+            } catch (SQLException failure) {
+                graph.removeSwitch(id);
+                throw failure;
+            }
+            p.sendMessage("§aSwitch " + id + " created; selected route is STRAIGHT.");
+            return;
+        }
+        if (a.length == 4 && a[1].equalsIgnoreCase("set")) {
+            TrackSwitch current = graph.trackSwitch(a[2]);
+            if (current == null) throw new IllegalArgumentException("Unknown switch: " + a[2]);
+            SwitchRoute route;
+            try { route = SwitchRoute.valueOf(a[3].toUpperCase(Locale.ROOT)); }
+            catch (IllegalArgumentException invalid) {
+                throw new IllegalArgumentException("Route must be straight or diverging.");
+            }
+            boolean locked = trains.values().stream().filter(train -> !train.sim.finished())
+                    .anyMatch(train -> train.sim.routeView().stream().anyMatch(node ->
+                            node.id().equals(current.stemNodeId())
+                                    || node.id().equals(current.straightNodeId())
+                                    || node.id().equals(current.divergingNodeId())));
+            if (locked) throw new IllegalArgumentException("Switch is route-locked by an active train.");
+            graph.setSwitchRoute(current.id(), route);
+            try {
+                persistSwitch(graph.trackSwitch(current.id()));
+            } catch (SQLException failure) {
+                graph.setSwitchRoute(current.id(), current.selectedRoute());
+                throw failure;
+            }
+            p.sendMessage("§aSwitch " + current.id() + " set to " + route + ".");
+            return;
+        }
+        if (a.length == 2 && a[1].equalsIgnoreCase("list")) {
+            graph.switches().forEach(turnout -> p.sendMessage("§e" + turnout.id() + " §7"
+                    + turnout.stemNodeId() + " -> " + turnout.selectedBranchNodeId()
+                    + " §f(" + turnout.selectedRoute() + ")"));
+            return;
+        }
+        throw new IllegalArgumentException("Usage: /pmf switch create <id> <stem> <straight> <diverging> | set <id> straight|diverging | list");
+    }
+
+    private void persistSwitch(TrackSwitch turnout) throws SQLException {
+        try (PreparedStatement q = db.prepareStatement(
+                "INSERT OR REPLACE INTO track_switches VALUES(?,?,?,?,?,?)")) {
+            q.setString(1, turnout.id()); q.setString(2, turnout.world());
+            q.setString(3, turnout.stemNodeId()); q.setString(4, turnout.straightNodeId());
+            q.setString(5, turnout.divergingNodeId()); q.setString(6, turnout.selectedRoute().name());
+            q.executeUpdate();
+        }
+    }
+
+    private void deleteSwitchRecord(String id) {
+        try (PreparedStatement q = db.prepareStatement("DELETE FROM track_switches WHERE id=?")) {
+            q.setString(1, id); q.executeUpdate();
+        } catch (SQLException e) {
+            getLogger().warning("Could not remove switch " + id + " from SQLite: " + e.getMessage());
+        }
     }
 
     private void nodeCommand(Player p, String[] a) throws SQLException {
