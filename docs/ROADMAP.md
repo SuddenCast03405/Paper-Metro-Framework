@@ -11,7 +11,8 @@
 
 ## Phase 1 — track engineering (in progress)
 - Arc-length parameterized spline segments (Catmull-Rom / cubic Bézier) for smooth curves.
-- Switch objects, route locking and conflict matrix.
+- Logical three-node switch model with mutually exclusive straight/diverging route selection in the engine.
+- Switch objects, route locking and conflict matrix in the Paper runtime.
 - Track editor wand, GUI and import/export.
 - Chunk/world availability and rail topology reconciliation on restart.
 - Dedicated tests for slopes, curves, junctions and rail-shape changes.

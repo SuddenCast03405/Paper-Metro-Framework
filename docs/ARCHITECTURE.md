@@ -17,11 +17,17 @@ The API defines TrackComponentType values:
 
 TrackComponent stores a stable PMF component ID, type, world and position. TrackComponentRegistry provides in-memory registration, lookup, removal and type queries. Conflicting component IDs are rejected; registering the same component twice is idempotent.
 
+## Switch routing model
+
+TrackSwitch represents a logical three-node turnout: one shared stem and two mutually exclusive exits (straight and diverging). Its selected SwitchRoute controls which stem/branch edge is traversable. TrackGraph applies that rule to both automatic shortest-path lookup and explicit route validation. Changing a switch position changes subsequent route calculations; it does not silently rewrite physical vanilla rail shapes.
+
+The engine rejects incomplete, cross-world or overlapping switch definitions and removes a switch if one of its three track nodes is removed. This is currently an engine/API feature: the Paper plugin does not yet expose in-game switch placement, persistence, animation or route locking.
+
 ## Persistence and vanilla compatibility
 
 The Paper plugin persists component metadata in SQLite's track_components table. PMF-tagged rail items place vanilla rail blocks for compatibility with unmodified clients; only blocks placed from tagged PMF items are adopted into the PMF graph. Unmarked vanilla rails are not automatically scanned, rewritten or claimed by PMF.
 
-The current implementation persists RAIL components. Other component types are API/engine foundations only; placement tools, block displays, route interlocking and signal logic will be implemented in later phases.
+The current plugin persists RAIL components. SWITCH routing is currently in-memory engine behavior only; switch placement tools, persistence, block displays, route interlocking and signal logic will be implemented in later phases.
 
 ## Upgrade behavior
 
