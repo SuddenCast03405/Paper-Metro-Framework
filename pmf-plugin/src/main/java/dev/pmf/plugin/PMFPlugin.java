@@ -255,6 +255,10 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
             }
         }
 
+        // Graph node refresh temporarily removes nodes. Preserve the logical turnout
+        // definitions and restore them after shape-derived edges have been rebuilt.
+        List<TrackSwitch> switchesBeforeRefresh = new ArrayList<>(graph.switches());
+
         // Remove old links first, then re-add nodes, so changed vanilla shapes cannot
         // leave stale edges behind in either the in-memory graph or SQLite.
         List<TrackNode> existing = new ArrayList<>();
@@ -291,6 +295,17 @@ public final class PMFPlugin extends JavaPlugin implements CommandExecutor, List
                 } catch (SQLException e) {
                     getLogger().warning("Could not persist rail connection: " + e.getMessage());
                 }
+            }
+        }
+
+        for (TrackSwitch turnout : switchesBeforeRefresh) {
+            try {
+                graph.registerSwitch(turnout);
+            } catch (IllegalArgumentException invalid) {
+                graph.removeSwitch(turnout.id());
+                deleteSwitchRecord(turnout.id());
+                getLogger().warning("Removed switch " + turnout.id()
+                        + " because the refreshed rail topology no longer supports it: " + invalid.getMessage());
             }
         }
     }
